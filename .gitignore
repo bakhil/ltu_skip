@@ -12,3 +12,11 @@ old/*
 *.bin
 *.pt
 old/*
+*env
+*pretrained_mdls/**
+*.json
+*.csv
+*.log
+data/
+*.wav
+*.flac

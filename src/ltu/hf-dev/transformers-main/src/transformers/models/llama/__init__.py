@@ -45,6 +45,10 @@ else:
         "LlamaPreTrainedModel",
         "LlamaForSequenceClassification",
     ]
+    _import_structure["modeling_llama_jump"] = [
+        "LlamaForCausalLM_jump",
+        "LlamaModel_jump",      
+    ]
 
 
 if TYPE_CHECKING:
@@ -65,6 +69,7 @@ if TYPE_CHECKING:
         pass
     else:
         from .modeling_llama import LlamaForCausalLM, LlamaForSequenceClassification, LlamaModel, LlamaPreTrainedModel
+        from .modeling_llama_jump import LlamaForCausalLM_jump, LlamaModel_jump
 
 
 else:
