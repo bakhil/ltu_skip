@@ -9,19 +9,28 @@
 #SBATCH --mem=470000
 #SBATCH --exclusive
 
+JUMP_TO_LAYER=8
+AUDIO_FILES_PATH_PREFIX="../../.."
+DATA_JSON_PATH=../../../openaqa/data/closed_ended/combine_cla_filtered.json
+
 export TRANSFORMERS_CACHE=./hf_cache/
 export HF_DATASETS_CACHE=./hf_cache/
 
-output_dir='../exp/stage1_proj_cla'
+output_dir="../exp/JUMP_TO_${JUMP_TO_LAYER}/stage1_proj_cla"
 mkdir -p $output_dir
 cp "$0" ${output_dir}/$(date +"%Y-%m-%d-%H-%M-%S").sh
 
-torchrun --nproc_per_node=4 --master_port=1234 ../finetune.py \
+
+NPROC_PER_NODE=$(python -c 'import torch; print(torch.cuda.device_count())')
+
+torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=1234 ../finetune_jump.py \
     --base_model '../../../pretrained_mdls/vicuna_ltu/' \
-    --data_path '../../../openaqa/data/closed_ended/combine_cla.json' \
+    --data_path $DATA_JSON_PATH \
+    --audio_files_path_prefix $AUDIO_FILES_PATH_PREFIX \
+    --jump_to_layer $JUMP_TO_LAYER \
     --output_dir $output_dir \
     --batch_size 256 \
-    --micro_batch_size 8 \
+    --micro_batch_size 32 \
     --num_epochs 2 \
     --learning_rate 1e-3 \
     --cutoff_len 108 \
@@ -31,7 +40,9 @@ torchrun --nproc_per_node=4 --master_port=1234 ../finetune.py \
     --lora_dropout 0.05 \
     --lora_target_modules ['dummy'] \
     --train_on_inputs \
-    --wandb_run_name ${output_dir} \
     --group_by_length \
     --save_steps 500 \
     --trainable_params proj
+
+
+
