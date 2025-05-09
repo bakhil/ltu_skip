@@ -61,7 +61,7 @@ mkdir -p $output_dir
 NPROC_PER_NODE=$(python -c 'import torch; print(torch.cuda.device_count())')
 
 torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=1234 ../finetune_jump.py \
-    --base_model "../exp/JUMP_TO_${JUMP_TO_LAYER}/stage1_proj_cla/checkpoint-8000/pytorch_model.bin" \
+    --base_model "${OUTPUT_DIR_PREFIX}/stage1_proj_cla/checkpoint-8000/pytorch_model.bin" \
     --data_path $DATA_JSON_PATH \
     --audio_files_path_prefix $AUDIO_FILES_PATH_PREFIX \
     --jump_to_layer $JUMP_TO_LAYER \
@@ -94,7 +94,7 @@ mkdir -p $output_dir
 NPROC_PER_NODE=$(python -c 'import torch; print(torch.cuda.device_count())')
 
 torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=1234 ../finetune_jump.py \
-    --base_model "../exp/JUMP_TO_${JUMP_TO_LAYER}/stage2_all_cla/checkpoint-8400/pytorch_model.bin" \
+    --base_model "${OUTPUT_DIR_PREFIX}/stage2_all_cla/checkpoint-8400/pytorch_model.bin" \
     --data_path $DATA_JSON_PATH \
     --audio_files_path_prefix $AUDIO_FILES_PATH_PREFIX \
     --jump_to_layer $JUMP_TO_LAYER \
@@ -127,7 +127,7 @@ mkdir -p $output_dir
 NPROC_PER_NODE=$(python -c 'import torch; print(torch.cuda.device_count())')
 
 torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=1234 ../finetune_jump.py \
-    --base_model "../exp/JUMP_TO_${JUMP_TO_LAYER}/stage3_all_close/checkpoint-6600/pytorch_model.bin" \
+    --base_model "${OUTPUT_DIR_PREFIX}/stage3_all_close/checkpoint-6600/pytorch_model.bin" \
     --data_path $DATA_JSON_PATH \
     --audio_files_path_prefix $AUDIO_FILES_PATH_PREFIX \
     --jump_to_layer $JUMP_TO_LAYER \
