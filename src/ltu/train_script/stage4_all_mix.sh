@@ -9,18 +9,29 @@
 #SBATCH --mem=470000
 #SBATCH --exclusive
 
+JUMP_TO_LAYER=8
+AUDIO_FILES_PATH_PREFIX="../../.."
+# DATA_JSON_PATH=../../../openaqa/data/openaqa_5.6M_filtered.json
+DATA_JSON_PATH=../../../openaqa/data/openaqa_toy.json
+
 export TRANSFORMERS_CACHE=./hf_cache/
 export HF_DATASETS_CACHE=./hf_cache/
-output_dir='../exp/stage4_all_mix'
+
+output_dir="../exp/JUMP_TO_${JUMP_TO_LAYER}/stage4_all_mix"
 mkdir -p $output_dir
 cp "$0" ${output_dir}/$(date +"%Y-%m-%d-%H-%M-%S").sh
 
-torchrun --nproc_per_node=4 --master_port=1234 ../finetune.py \
-    --base_model '/data/sls/scratch/yuangong/ltu/src/ltu/exp/stage3_all_close/checkpoint-6000/pytorch_model.bin' \
-    --data_path '../../../openaqa/openaqa_5.6M.json' \
+
+NPROC_PER_NODE=$(python -c 'import torch; print(torch.cuda.device_count())')
+
+torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=1234 ../finetune_jump.py \
+    --base_model "../exp/JUMP_TO_${JUMP_TO_LAYER}/stage3_all_close/checkpoint-6600/pytorch_model.bin" \
+    --data_path $DATA_JSON_PATH \
+    --audio_files_path_prefix $AUDIO_FILES_PATH_PREFIX \
+    --jump_to_layer $JUMP_TO_LAYER \
     --output_dir $output_dir \
     --batch_size 256 \
-    --micro_batch_size 4 \
+    --micro_batch_size 16 \
     --num_epochs 1 \
     --learning_rate 1e-4 \
     --cutoff_len 108 \
@@ -31,6 +42,5 @@ torchrun --nproc_per_node=4 --master_port=1234 ../finetune.py \
     --lora_target_modules '[q_proj,v_proj]' \
     --train_on_inputs \
     --group_by_length \
-    --wandb_run_name ${output_dir} \
     --save_steps 2000 \
     --trainable_params all

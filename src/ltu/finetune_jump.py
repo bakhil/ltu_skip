@@ -246,7 +246,8 @@ def train(
             train_val["test"].shuffle().map(generate_and_tokenize_prompt)
         )
     else:
-        train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
+        # train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
+        train_data = data["train"].map(generate_and_tokenize_prompt)
         val_data = None
 
     if not ddp and torch.cuda.device_count() > 1:
@@ -286,6 +287,7 @@ def train(
             save_steps=save_steps,
             dataloader_num_workers=8,
             output_dir=output_dir,
+            seed=100,
             save_total_limit=50,
             load_best_model_at_end=False,
             ddp_find_unused_parameters=False if ddp else None,
