@@ -12,6 +12,7 @@
 JUMP_TO_LAYER=8
 
 OUTPUT_DIR_PREFIX="../exp/JUMP_TO_${JUMP_TO_LAYER}/"$(date +"%Y-%m-%d-%H-%M-%S")
+mkdir -p $OUTPUT_DIR_PREFIX
 cp "$0" ${OUTPUT_DIR_PREFIX}/$(date +"%Y-%m-%d-%H-%M-%S").sh
 
 
@@ -49,7 +50,7 @@ torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=1234 ../finetune_jump.py
     --trainable_params proj
 ########################################################################################
 
-sleep 60
+sleep 1
 
 ############################### Stage 2 ################################################
 AUDIO_FILES_PATH_PREFIX="../../.."
@@ -82,7 +83,7 @@ torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=1234 ../finetune_jump.py
     --trainable_params all
 ########################################################################################
 
-sleep 60
+sleep 1
 
 ############################### Stage 3 ################################################
 AUDIO_FILES_PATH_PREFIX="../../.."
@@ -115,7 +116,7 @@ torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=1234 ../finetune_jump.py
     --trainable_params all
 ########################################################################################
 
-sleep 60
+sleep 1
 
 ################################ Stage 4 ################################################
 AUDIO_FILES_PATH_PREFIX="../../.."
