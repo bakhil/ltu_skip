@@ -55,15 +55,17 @@ def main(
     eval_mdl_path: str = '../../pretrained_mdls/ltu_ori_paper.bin',
     audio_data_path: str = '../..',
     batch_size: int = 128,
-    max_new_tokens_generate: int = 400,
+    max_new_tokens_generate: int = 100,
+    save_output_folder: str = './eval_res',
 ):
-    base_model = base_model or os.environ.get("BASE_MODEL", "")
+    # base_model = base_model or os.environ.get("BASE_MODEL", "")
+    torch.manual_seed(42)
     assert (
         base_model
     ), "Please specify a --base_model, e.g. --base_model='huggyllama/llama-7b'"
 
     prompter = Prompter(prompt_template)
-    tokenizer = LlamaTokenizer.from_pretrained(base_model)
+    tokenizer = LlamaTokenizer.from_pretrained(base_model, padding_side="left")
 
     # model = LlamaForCausalLM_jump.from_pretrained(base_model, device_map="auto", torch_dtype=torch.float16)
     model = LlamaForCausalLM_jump.from_pretrained(base_model, device_map="auto", torch_dtype=torch.float16)
@@ -93,7 +95,7 @@ def main(
 
     model.eval()
     eval_dataset_list = ['esc50', 'audiocaps', 'as', 'vgg', 'clotho', 'fsd', 'vs', 'bj', 'tut', 'dcase', 'open-gpt3', 'open-gpt4']
-    eval_dataset_list = ['audiocaps']
+    eval_dataset_list = ['open-gpt4']
 
     # all these json file can be downloaded from https://www.dropbox.com/scl/fo/juh1dk9ltvhghuj0l1sag/h?rlkey=0n2cd5kebzh8slwanjzrfn7q6&dl=0
     # you will need to prepare audio by yourself, note please convert all audios to 16khz
@@ -165,11 +167,14 @@ def main(
             task_dict = {'text': ''}
 
         for task in task_dict.keys():
+            if 'cap' not in task:
+                max_new_tokens_generate = max_new_tokens_generate * 3
+                batch_size = batch_size // 4
             result_json = []
             print(f'Running {eval_dataset} dataset for {task} task containing {len(data_json_1)} samples.')
             files_found, files_not_found = 0, 0
             current_batch = 0
-            input_ids_list = []
+            # input_ids_list = []
             cur_audio_input_list = []
             cur_audio_path_list = []
             cur_answer_list = []
@@ -191,7 +196,7 @@ def main(
 
                 prompt = prompter.generate_prompt(instruction, None)
                 # print('Input prompt: ', prompt)
-                inputs = tokenizer(prompt, return_tensors="pt")
+                # inputs = tokenizer(prompt, return_tensors="pt")
                 # input_ids = inputs["input_ids"].to(device)
                 
                 try:
@@ -209,7 +214,7 @@ def main(
                     files_not_found += 1                
                     continue
 
-                input_ids_list.append(inputs["input_ids"].to(device))
+                # input_ids_list.append(inputs["input_ids"].to(device))
                 cur_audio_input_list.append(cur_audio_input_local)
                 cur_audio_path_list.append(cur_audio_path)
                 cur_answer_list.append(cur_answer)
@@ -219,7 +224,8 @@ def main(
                 current_batch += 1
                 if current_batch == batch_size or i == len(data_json_1) - 1:
 
-                    input_ids = torch.cat(input_ids_list, dim=0)
+                    # input_ids = torch.cat(input_ids_list, dim=0)
+                    input_ids = tokenizer(prompt_list, return_tensors="pt", padding=True).to(device)["input_ids"]
                     cur_audio_input = torch.cat(cur_audio_input_list, dim=0)
 
                     generation_config = GenerationConfig(
@@ -257,7 +263,7 @@ def main(
                         result_json.append({'prompt': instruction, 'pred': output[len(prompt):], 'ref': cur_answer, 'audio_id': cur_audio_path})
                     
                     torch.cuda.empty_cache()
-                    input_ids_list = []
+                    # input_ids_list = []
                     cur_audio_input_list = []
                     cur_audio_path_list = []
                     cur_answer_list = []
@@ -275,9 +281,10 @@ def main(
             print()
 
             save_name = eval_mdl_path.split('/')[-1].split('.')[0]
-            if os.path.exists('./eval_res') == False:
-                os.mkdir('./eval_res')
-            with open('./eval_res/jump_to_{:d}_{:s}_{:s}_{:s}.json'.format(jump_to_layer, eval_dataset, save_name, task), 'w') as fj:
+            if os.path.exists(save_output_folder) == False:
+                os.mkdir(save_output_folder)
+            save_file_full_name = os.path.join(save_output_folder, f'jump_to_{jump_to_layer:d}_{eval_dataset:s}_{save_name:s}_{task:s}.json')
+            with open(save_file_full_name, 'w') as fj:
                 json.dump(result_json, fj, indent=1)
 if __name__ == "__main__":
     fire.Fire(main)
