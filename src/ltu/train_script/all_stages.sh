@@ -1,15 +1,18 @@
 #!/bin/bash
-#SBATCH -J alm
-#SBATCH -o ./log/%j_alm.txt
-#SBATCH --qos=regular
-#SBATCH --gres=gpu:4
+#SBATCH --partition=gpuH200x8
+#SBATCH --account=befy-delta-gpu
+#SBATCH --gpus=2
 #SBATCH --nodes=1
-#SBATCH --partition=a5
-#SBATCH --ntasks-per-node=32
-#SBATCH --mem=470000
-#SBATCH --exclusive
+#SBATCH --cpus-per-gpu=12
+#SBATCH --mem-per-gpu=60G
+#SBATCH --time=48:00:00
+#SBATCH --output="../slurm_outputs/all_stages_layer12.%j.out"
+#SBATCH --error="../slurm_outputs/all_stages_layer12.%j.out"
 
-JUMP_TO_LAYER=8
+
+source ../../../ltu_env/bin/activate
+
+JUMP_TO_LAYER=12
 
 OUTPUT_DIR_PREFIX="../exp/JUMP_TO_${JUMP_TO_LAYER}/"$(date +"%Y-%m-%d-%H-%M-%S")
 mkdir -p $OUTPUT_DIR_PREFIX
@@ -35,7 +38,7 @@ torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=1234 ../finetune_jump.py
     --jump_to_layer $JUMP_TO_LAYER \
     --output_dir $output_dir \
     --batch_size 256 \
-    --micro_batch_size 32 \
+    --micro_batch_size 64 \
     --num_epochs 2 \
     --learning_rate 1e-3 \
     --cutoff_len 108 \
@@ -68,7 +71,7 @@ torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=1234 ../finetune_jump.py
     --jump_to_layer $JUMP_TO_LAYER \
     --output_dir $output_dir \
     --batch_size 256 \
-    --micro_batch_size 16 \
+    --micro_batch_size 64 \
     --num_epochs 2 \
     --learning_rate 1e-4 \
     --cutoff_len 108 \
@@ -101,7 +104,7 @@ torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=1234 ../finetune_jump.py
     --jump_to_layer $JUMP_TO_LAYER \
     --output_dir $output_dir \
     --batch_size 256 \
-    --micro_batch_size 16 \
+    --micro_batch_size 64 \
     --num_epochs 1 \
     --learning_rate 1e-4 \
     --cutoff_len 108 \
@@ -134,7 +137,7 @@ torchrun --nproc_per_node=$NPROC_PER_NODE --master_port=1234 ../finetune_jump.py
     --jump_to_layer $JUMP_TO_LAYER \
     --output_dir $output_dir \
     --batch_size 256 \
-    --micro_batch_size 16 \
+    --micro_batch_size 64 \
     --num_epochs 1 \
     --learning_rate 1e-4 \
     --cutoff_len 108 \
