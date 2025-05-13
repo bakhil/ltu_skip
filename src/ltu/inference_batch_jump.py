@@ -57,9 +57,10 @@ def main(
     batch_size: int = 128,
     max_new_tokens_generate: int = 100,
     save_output_folder: str = './eval_res',
+    random_seed: int = 42,
 ):
     # base_model = base_model or os.environ.get("BASE_MODEL", "")
-    torch.manual_seed(42)
+    torch.manual_seed(random_seed)
     assert (
         base_model
     ), "Please specify a --base_model, e.g. --base_model='huggyllama/llama-7b'"
@@ -171,8 +172,11 @@ def main(
 
         for task in task_dict.keys():
             if 'cap' not in task:
-                max_new_tokens_generate = max_new_tokens_generate * 3
-                batch_size = batch_size // 4
+                actual_batch_size = batch_size // 4
+                actual_max_new_tokens_generate = max_new_tokens_generate * 3
+            else:
+                actual_batch_size = batch_size
+                actual_max_new_tokens_generate = max_new_tokens_generate
             result_json = []
             print(f'Running {eval_dataset} dataset for {task} task containing {len(data_json_1)} samples.')
             files_found, files_not_found = 0, 0
@@ -226,7 +230,7 @@ def main(
                 prompt_list.append(prompt)
 
                 current_batch += 1
-                if current_batch == batch_size or i == len(data_json_1) - 1:
+                if current_batch == actual_batch_size or i == len(data_json_1) - 1:
 
                     # input_ids = torch.cat(input_ids_list, dim=0)
                     input_ids = tokenizer(prompt_list, return_tensors="pt", padding=True).to(device)["input_ids"]
@@ -239,7 +243,7 @@ def main(
                         top_p=top_p,
                         top_k=top_k,
                         repetition_penalty=1.1,
-                        max_new_tokens=max_new_tokens_generate,
+                        max_new_tokens=actual_max_new_tokens_generate,
                         bos_token_id=model.config.bos_token_id,
                         eos_token_id=model.config.eos_token_id,
                         pad_token_id=model.config.pad_token_id,
@@ -255,12 +259,12 @@ def main(
                             generation_config=generation_config,
                             return_dict_in_generate=True,
                             output_scores=True,
-                            max_new_tokens=max_new_tokens_generate,
+                            max_new_tokens=actual_max_new_tokens_generate,
                         )
                     for s_idx,s in enumerate(generation_output.sequences):
                         output = tokenizer.decode(s[input_token_seq_len:])
                         output_length = output.find('</s>')
-                        output = output[:output_length]
+                        output = output[:output_length].strip()
                         cur_answer = cur_answer_list[s_idx]
                         cur_audio_path = cur_audio_path_list[s_idx]
                         prompt = prompt_list[s_idx]
