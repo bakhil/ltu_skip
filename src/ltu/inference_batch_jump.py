@@ -95,7 +95,6 @@ def main(
 
     model.eval()
     eval_dataset_list = ['esc50', 'audiocaps', 'as', 'vgg', 'clotho', 'fsd', 'vs', 'bj', 'tut', 'dcase', 'open-gpt3', 'open-gpt4']
-    eval_dataset_list = ['open-gpt4']
 
     # all these json file can be downloaded from https://www.dropbox.com/scl/fo/juh1dk9ltvhghuj0l1sag/h?rlkey=0n2cd5kebzh8slwanjzrfn7q6&dl=0
     # you will need to prepare audio by yourself, note please convert all audios to 16khz
@@ -129,6 +128,10 @@ def main(
         elif eval_dataset == 'fsd':
             with open('../../eval_data/fsd50k_eval.json', 'r') as fp:
                 data_json_1 = json.load(fp)
+            ################ Needs to be fixed in json ideally ###########################################
+            for fsd_idx in range(len(data_json_1)):
+                data_json_1[fsd_idx]['audio_id'] = data_json_1[fsd_idx]['audio_id'].replace('FSD50K.eval_audio_16k', 'FSD50K.eval_audio')
+            ##############################################################################################
             task_dict = {'caption': 'Close-ended question: Write an audio caption describing the sound.'}
         # vocalsound classification
         elif eval_dataset == 'vs':
@@ -180,6 +183,7 @@ def main(
             cur_answer_list = []
             instruction_list = []
             prompt_list = []
+            begin_time = time.time()
             for i in range(len(data_json_1)):
                 cur_answer = data_json_1[i]["output"]
                 cur_audio_path = data_json_1[i]["audio_id"]
@@ -192,7 +196,6 @@ def main(
                 else:
                     instruction = data_json_1[i]["instruction"]
 
-                begin_time = time.time()
 
                 prompt = prompter.generate_prompt(instruction, None)
                 # print('Input prompt: ', prompt)
@@ -200,14 +203,15 @@ def main(
                 # input_ids = inputs["input_ids"].to(device)
                 
                 try:
-                    if audio_path != 'empty':
+                    if data_json_1[i]["audio_id"] != 'empty':
                         cur_audio_input_local = load_audio(audio_path).unsqueeze(0)
                         if torch.cuda.is_available() == False:
                             pass
                         else:
                             cur_audio_input_local = cur_audio_input_local.half().to(device)
                     else:
-                        cur_audio_input_local = None
+                        cur_audio_input_local = (torch.zeros(1, 1024, 128, device=device) + 0.1).half()
+                        prompt = prompter.generate_prompt(instruction + ' (ignore any audio)', None)
                     files_found += 1
                 except:
                     # print('Audio file not found: ', audio_path)
@@ -226,6 +230,7 @@ def main(
 
                     # input_ids = torch.cat(input_ids_list, dim=0)
                     input_ids = tokenizer(prompt_list, return_tensors="pt", padding=True).to(device)["input_ids"]
+                    input_token_seq_len = input_ids.shape[1]
                     cur_audio_input = torch.cat(cur_audio_input_list, dim=0)
 
                     generation_config = GenerationConfig(
@@ -253,15 +258,15 @@ def main(
                             max_new_tokens=max_new_tokens_generate,
                         )
                     for s_idx,s in enumerate(generation_output.sequences):
-                        output = tokenizer.decode(s)[6:]
+                        output = tokenizer.decode(s[input_token_seq_len:])
                         output_length = output.find('</s>')
                         output = output[:output_length]
                         cur_answer = cur_answer_list[s_idx]
                         cur_audio_path = cur_audio_path_list[s_idx]
                         prompt = prompt_list[s_idx]
                         instruction = instruction_list[s_idx]
-                        result_json.append({'prompt': instruction, 'pred': output[len(prompt):], 'ref': cur_answer, 'audio_id': cur_audio_path})
-                    
+                        result_json.append({'prompt': instruction, 'pred': output, 'ref': cur_answer, 'audio_id': cur_audio_path})
+                    # breakpoint()
                     torch.cuda.empty_cache()
                     # input_ids_list = []
                     cur_audio_input_list = []
@@ -271,18 +276,18 @@ def main(
                     prompt_list = []
                     current_batch = 0
 
-                    end_time = time.time()
                 # print(output)
                 # print('eclipse time: ', end_time-begin_time, ' seconds.')
 
                 print(f'\rDone with {i+1}/{len(data_json_1)} samples of "{eval_dataset}" dataset for {task} task', end='')
+            end_time = time.time()
             print()
-            print(f'Found {files_found} files, not found {files_not_found} files in {eval_dataset} dataset.')
+            print(f'Found {files_found} files, not found {files_not_found} files in {eval_dataset} dataset. Done inference in {(end_time-begin_time)/60.:.2f} minutes.')
             print()
 
             save_name = eval_mdl_path.split('/')[-1].split('.')[0]
             if os.path.exists(save_output_folder) == False:
-                os.mkdir(save_output_folder)
+                os.makedirs(save_output_folder, exist_ok=True)
             save_file_full_name = os.path.join(save_output_folder, f'jump_to_{jump_to_layer:d}_{eval_dataset:s}_{save_name:s}_{task:s}.json')
             with open(save_file_full_name, 'w') as fj:
                 json.dump(result_json, fj, indent=1)
