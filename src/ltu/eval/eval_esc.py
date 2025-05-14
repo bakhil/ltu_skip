@@ -6,6 +6,7 @@
 # @File    : eval_esc.py
 
 # evaluation classification based on gpt/bert embeddings
+import os
 import os.path
 import datetime
 current_time = datetime.datetime.now()
@@ -19,37 +20,20 @@ import numpy as np
 from collections import OrderedDict
 from sklearn.metrics import accuracy_score, classification_report
 from stats import calculate_stats
+import argparse
 
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_random_exponential,
-)  # for exponential backoff
+parser = argparse.ArgumentParser()
+parser.add_argument('--files', nargs='+', required=True,
+                        help='List of space-separated json file names')
+parser.add_argument('--esc_class_labels', type=str, default='./labels/esc_class_labels_indices.csv')
+parser.add_argument('--text_embed_setting', type=str, default='gpt', choices=['gpt', 'bert'])
+args = parser.parse_args()
 
-from itertools import product
-def get_combinations(a, b):
-    combinations = []
-    for x, y in product(a, b):
-        combinations.append(f"{x}_{y}")
-    return combinations
+eval_file_list = args.files
 
 dataset = 'esc50'
 llm_task = 'caption'
-text_embed_setting = 'gpt'
-
-directory = '/data/sls/scratch/yuangong/audiollm/src/llm/ltu_e/eval_res/raw/'
-prefix = 'esc50'
-files = os.listdir(directory)
-eval_file_list = [os.path.join(directory, file) for file in files if file.startswith(prefix)]
-eval_file_list.sort()
-eval_file_list = eval_file_list[::-1]
-print(eval_file_list)
-
-eval_file_list = [
-    'esc50_formal_speech_all_open_close_final_checkpoint-35000_caption_fp16_joint_3',
-    'esc50_formal_audio_lora_mix_from_close_from_e2e_cla_from_proj_checkpoint-20000_caption_0.10_0.95_500'
-]
-eval_file_list = [directory + x + '.json' for x in eval_file_list]
+text_embed_setting = args.text_embed_setting
 
 for x in eval_file_list:
     assert os.path.exists(x) == True
@@ -60,8 +44,10 @@ bert_mdl_size = 'bert-large-uncased'
 bert_tokenizer = ""
 bert_model = ""
 
-all_res = []
 for eval_file in eval_file_list:
+    all_res = []
+    eval_file_folder = os.path.dirname(os.path.abspath(eval_file))
+    
     def get_bert_embedding(input_text):
         input_text = remove_punctuation_and_lowercase(input_text)
         inputs = bert_tokenizer(input_text, return_tensors="pt")
@@ -73,18 +59,16 @@ for eval_file in eval_file_list:
         last_hidden_states = torch.mean(outputs.last_hidden_state[0], dim=0).cpu().detach().numpy().tolist()
         return last_hidden_states
 
-    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(10))
-    def embedding_with_backoff(**kwargs):
-        return openai.Embedding.create(**kwargs)
-
-    def get_gpt_embedding(input_text, mdl_size='text-embedding-ada-002'):
+    def get_gpt_embedding(input_text_list, openai_model='text-embedding-ada-002'):
         # TODO: change to your openai key
-        openai.api_key = 'your_openai_key'
-        response = embedding_with_backoff(
-            input=input_text,
-            model=mdl_size
+        client = openai.OpenAI()
+        response = client.embeddings.create(
+            input=input_text_list,
+            model=openai_model,
+            encoding_format='float'
         )
-        embeddings = response['data'][0]['embedding']
+        # embeddings = response['data'][0]['embedding']
+        embeddings = [response.data[i].embedding for i in range(len(response.data))]
         return embeddings
 
     def cosine_similarity(vector1, vector2):
@@ -98,63 +82,55 @@ for eval_file in eval_file_list:
         text = text.lower()
         return text
 
-    def gen_cm(all_truth, all_pred, save_name):
-        from sklearn.metrics import confusion_matrix
-        import matplotlib.pyplot as plt
-        import numpy as np
-
-        # list of label names
-        label_names = list(label_dict.keys())
-
-        # generate confusion matrix
-        cm = confusion_matrix(all_truth, all_pred)
-
-        # plot confusion matrix as a figure
-        plt.imshow(cm, cmap=plt.cm.Blues)
-        plt.title("Confusion Matrix")
-        plt.colorbar()
-        tick_marks = np.arange(len(label_names))
-        plt.xticks(tick_marks, label_names, rotation=90, fontsize=6)
-        plt.yticks(tick_marks, label_names, fontsize=6)
-        plt.xlabel("Predicted Label")
-        plt.ylabel("True Label")
-
-        # add label values to the confusion matrix cells
-        for i in range(len(label_names)):
-            for j in range(len(label_names)):
-                plt.text(j, i, cm[i, j], ha="center", va="center", color="white")
-
-        plt.savefig(save_name, dpi=300)
-
-    label_list = np.loadtxt('/data/sls/scratch/yuangong/whisper-a/egs/esc-50/data/esc_class_labels_indices.csv', delimiter=',', dtype=str, skiprows=1)
+    label_list = np.loadtxt(args.esc_class_labels, delimiter=',', dtype=str, skiprows=1)
 
     # load cached label embedding dict
-    if os.path.exists('/data/sls/scratch/yuangong/audiollm/src/llm/ltu_e/eval_res/label_embed_dict/{:s}_{:s}.json'.format(dataset, text_embed_setting)):
-        with open('/data/sls/scratch/yuangong/audiollm/src/llm/ltu_e/eval_res/label_embed_dict/{:s}_{:s}.json'.format(dataset, text_embed_setting), 'r') as f:
+    if os.path.exists('{:s}/label_embed_dict/{:s}_{:s}.json'.format(eval_file_folder, dataset, text_embed_setting)):
+        with open('{:s}/label_embed_dict/{:s}_{:s}.json'.format(eval_file_folder, dataset, text_embed_setting), 'r') as f:
             json_str = f.read()
         label_dict = json.loads(json_str, object_pairs_hook=OrderedDict)
     else:
         label_dict = OrderedDict()
+        if text_embed_setting == 'gpt':
+            gpt_embeddings_list = get_gpt_embedding(['sound of ' + class_name[1:-1].replace('_', ' ').lower() for class_name in label_list[:, 2]])
         for i in range(label_list.shape[0]):
             class_code = label_list[i, 1]
             class_name = label_list[i, 2][1:-1]
             if text_embed_setting == 'gpt':
-                label_dict[class_name] = get_gpt_embedding('sound of ' + class_name.replace('_', ' ').lower())
+                # label_dict[class_name] = get_gpt_embedding('sound of ' + class_name.replace('_', ' ').lower())
+                label_dict[class_name] = gpt_embeddings_list[i]
             elif text_embed_setting == 'bert':
                 label_dict[class_name] = get_bert_embedding('sound of ' + class_name.replace('_', ' ').lower())
-        with open('/data/sls/scratch/yuangong/audiollm/src/llm/ltu_e/eval_res/label_embed_dict/{:s}_{:s}.json'.format(dataset, text_embed_setting), 'w') as f:
+        os.makedirs('{:s}/label_embed_dict'.format(eval_file_folder), exist_ok=True)
+        with open('{:s}/label_embed_dict/{:s}_{:s}.json'.format(eval_file_folder, dataset, text_embed_setting), 'w') as f:
             json_str = json.dumps(label_dict)
             f.write(json_str)
 
     with open(eval_file, 'r') as fp:
         eval_data = json.load(fp)
 
-    if os.path.exists('/data/sls/scratch/yuangong/audiollm/src/llm/ltu_e/eval_res/embedding_cache/{:s}_{:s}_{:s}.json'.format( dataset, llm_task, text_embed_setting)) == True:
-        with open('/data/sls/scratch/yuangong/audiollm/src/llm/ltu_e/eval_res/embedding_cache/{:s}_{:s}_{:s}.json'.format( dataset, llm_task, text_embed_setting), 'r') as f:
+    save_cache_path = '{:s}/embedding_cache/{:s}_{:s}_{:s}.json'.format(eval_file_folder, dataset, llm_task, text_embed_setting)
+    if os.path.exists(save_cache_path) == True:
+        with open(save_cache_path, 'r') as f:
             embed_cache = f.read()
         embed_cache = json.loads(embed_cache)
     else:
         embed_cache = {}
+        if text_embed_setting == 'gpt':
+            if llm_task == 'cla':
+                list_of_preds_for_cache = [x['pred'].split(':')[-1].split('.')[0][1:].split(';') for x in eval_data]
+                list_of_preds_for_cache = ['sound of ' + x.lower().lstrip() for x in list_of_preds_for_cache]
+            elif llm_task == 'caption':
+                list_of_preds_for_cache = [x['pred'].split(':')[-1].lstrip() for x in eval_data]
+                list_of_preds_for_cache = ['sound of ' + x.lower() for x in list_of_preds_for_cache]
+            list_of_embeds_for_cache = get_gpt_embedding(list_of_preds_for_cache)
+            for i in range(len(list_of_preds_for_cache)):
+                embed_cache[list_of_preds_for_cache[i]] = list_of_embeds_for_cache[i]
+            embed_cache_json = json.dumps(embed_cache)
+            
+            os.makedirs(os.path.dirname(save_cache_path), exist_ok=True)
+            with open(save_cache_path, 'w') as f:
+                f.write(embed_cache_json)
 
     def get_pred(cur_pred_list, label_dict, mode='accu'):
         # at beginning, all zero scores
@@ -166,7 +142,8 @@ for eval_file in eval_file_list:
                 cur_pred_embed = embed_cache[cur_pred]
             else:
                 if text_embed_setting == 'gpt':
-                    cur_pred_embed = get_gpt_embedding(cur_pred)
+                    # cur_pred_embed = get_gpt_embedding(cur_pred)
+                    raise Exception('Should have cached gpt embedding')
                 else:
                     cur_pred_embed = get_bert_embedding(cur_pred)
                 embed_cache[cur_pred] = cur_pred_embed
@@ -201,7 +178,7 @@ for eval_file in eval_file_list:
         all_pred[i, cur_pred_idx] = 1.0
         all_truth[i, cur_truth_idx] = 1.0
 
-    save_fold = "/data/sls/scratch/yuangong/audiollm/src/llm/ltu_e/eval_res/{:s}_{:s}_{:s}_cla_report".format('.'.join(eval_file.split('/')[-1].split('.')[:-1]), llm_task, text_embed_setting)
+    save_fold = "{:s}/{:s}_{:s}_{:s}_cla_report".format(eval_file_folder, '.'.join(eval_file.split('/')[-1].split('.')[:-1]), llm_task, text_embed_setting)
     if os.path.exists(save_fold) == False:
         os.makedirs(save_fold)
 
@@ -215,13 +192,8 @@ for eval_file in eval_file_list:
 
     np.savetxt(save_fold + '/result_summary.csv', [mAP, mAUC, acc], delimiter=',')
 
-    embed_cache = json.dumps(embed_cache)
-    save_cache_path = '/data/sls/scratch/yuangong/audiollm/src/llm/ltu_e/eval_res/embedding_cache/{:s}_{:s}_{:s}.json'.format(dataset, llm_task, text_embed_setting)
-    with open(save_cache_path, 'w') as f:
-        f.write(embed_cache)
-
     sk_acc = accuracy_score(all_truth, all_pred)
     print('esc50 accuracy: ', acc, sk_acc)
 
     all_res.append([eval_file, acc])
-    np.savetxt('/data/sls/scratch/yuangong/audiollm/src/llm/ltu_e/eval_res/summary/summary_esc50_{:s}.csv'.format(time_string), all_res, delimiter=',', fmt='%s')
+    np.savetxt('{:s}/summary_esc50_{:s}.csv'.format(save_fold, time_string), all_res, delimiter=',', fmt='%s')

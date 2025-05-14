@@ -14,6 +14,7 @@ import string
 import numpy as np
 import caption_evaluation_tools.eval_metrics as eval_metrics
 import datetime
+import argparse
 current_time = datetime.datetime.now()
 time_string = current_time.strftime("%Y%m%d%H%M%S")
 
@@ -28,16 +29,24 @@ def remove_punctuation_and_lowercase(text):
     text = text.lower()
     return text
 
-directory = '../eval_res/'
+parser = argparse.ArgumentParser()
+parser.add_argument('--files', nargs='+', required=True, 
+                        help='List of space-separated json file names')
+args = parser.parse_args()
+
+#directory = '../eval_res/'
 # prefix = 'jump_to_0_audiocaps'
 # files = os.listdir(directory)
 # eval_file_list = [os.path.join(directory, file) for file in files if prefix in file and file.endswith('.json')]
-eval_file_list = ['../eval_res/jump_to_12_audiocaps_ltu_ori_paper_acaps_cap.json']
+#eval_file_list = ['../eval_res/jump_to_4_audiocaps_pytorch_model_acaps_cap.json']
+eval_file_list = args.files
 eval_file_list.sort()
 print(eval_file_list)
 
-result_summary = []
 for eval_file in eval_file_list:
+    eval_file_folder = os.path.dirname(os.path.abspath(eval_file))
+
+    result_summary = []
     with open(eval_file, 'r') as fp:
         eval_data = json.load(fp)
 
@@ -60,7 +69,7 @@ for eval_file in eval_file_list:
             pred_dict[cur_audio_id] = [cur_pred]
             truth_dict[cur_audio_id] = [cur_truth]
 
-    save_fold = "../eval_res/{:s}_report".format('.'.join(eval_file.split('/')[-1].split('.')[:-1]))
+    save_fold = "{:s}/{:s}_report".format(eval_file_folder, '.'.join(eval_file.split('/')[-1].split('.')[:-1]))
     if os.path.exists(save_fold) == False:
         os.mkdir(save_fold)
 
