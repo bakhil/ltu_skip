@@ -26,4 +26,6 @@ data/
 test.py
 test.ipynb
 caption_evaluation_tools
-
+eval_res
+**/train_script/outputs/*
+slurm_outputs

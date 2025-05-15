@@ -31,7 +31,7 @@ parser.add_argument('--files', nargs='+', required=True,
 parser.add_argument('--fsd_class_labels', type=str, default='./labels/class_labels_indices_fsd50k.csv')
 parser.add_argument('--text_embed_setting', type=str, default='gpt', choices=['gpt', 'bert'])
 parser.add_argument('--max_openai_batch_size', type=int, default=2000)
-parser.add_argument('--num_os_processes', type=int, default=50)
+parser.add_argument('--num_os_processes', type=int, default=40)
 args = parser.parse_args()
 
 eval_file_list = args.files
@@ -129,12 +129,6 @@ for eval_file in eval_file_list:
 
     with open(eval_file, 'r') as fp:
         eval_data = json.load(fp)
-
-    # print(eval_data[1])
-    # print(eval_data[1]['audio_id'])
-    # print(eval_data[1]['pred'].replace('"', '').split('Audio caption')[-1][2:])
-    # print(eval_data[1]['pred'].split(': ')[-1].split('; '))
-    # print(eval_data[1]['ref'].split(': ')[-1].split('; '))
 
     save_cache_path = '{:s}/embedding_cache/{:s}_{:s}_{:s}.json'.format(eval_file_folder, dataset, llm_task, text_embed_setting)
     if os.path.exists(save_cache_path) == True:

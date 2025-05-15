@@ -6,6 +6,7 @@
 # @File    : eval_llm_cla.py
 
 # evaluation classification based on gpt/bert embeddings
+import os
 import os.path
 
 import openai
@@ -19,25 +20,23 @@ from collections import OrderedDict
 from transformers import AutoTokenizer, BertModel
 from sklearn.metrics import accuracy_score, classification_report
 from stats import calculate_stats
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_random_exponential,
-)  # for exponential backoff
+import argparse
+import multiprocessing as mp
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--files', nargs='+', required=True,
+                        help='List of space-separated json file names')
+parser.add_argument('--vgg_class_labels', type=str, default='./labels/class_labels_indices_vgg.csv')
+parser.add_argument('--text_embed_setting', type=str, default='gpt', choices=['gpt', 'bert'])
+parser.add_argument('--max_openai_batch_size', type=int, default=2000)
+parser.add_argument('--num_os_processes', type=int, default=40)
+args = parser.parse_args()
+
+eval_file_list = args.files
 
 dataset = 'vgg'
 llm_task = 'caption'
-text_embed_setting = 'gpt'
-# eval_file_list1 = ['/data/sls/scratch/yuangong/audiollm/src/llm/alpaca-lora-main/eval_res/vgg_formal_audio_lora_mix_from_close_from_e2e_cla_from_proj_checkpoint-' + str(x) + '_{:s}_0.10_0.95_500_repp110.json'.format(llm_task) for x in range(16000, 24000, 2000)]
-# eval_file_list2 = ['/data/sls/scratch/yuangong/audiollm/src/llm/alpaca-lora-main/eval_res/vgg_formal_audio_lora_mix_from_close_from_e2e_cla_from_proj_1e-3_checkpoint-' + str(x) + '_{:s}_0.10_0.95_500_repp110.json'.format(llm_task) for x in range(16000, 24000, 2000)]
-# eval_file_list = eval_file_list1 + eval_file_list2
-
-base_path = '/data/sls/scratch/yuangong/audiollm/src/llm/alpaca-lora-main/eval_res/'
-eval_file_list = [#'vgg_formal_audio_lora_mix_from_proj_fz_no_adapter_checkpoint-22000_caption_0.10_0.95_500_repp110.json',
-#'vgg_formal_audio_lora_close_from_e2e_cla_from_proj_checkpoint-6000_caption_0.10_0.95_500_repp110.json',
-#'vgg_formal_audio_lora_mix_from_proj_fz_audio_encoder_checkpoint-22000_caption_0.10_0.95_500_repp110.json',
-'vgg_formal_audio_lora_mix_no_corr_cont_checkpoint-22000_caption_0.10_0.95_500_repp110.json']
-eval_file_list = [ base_path + x for x in eval_file_list]
+text_embed_setting = args.text_embed_setting
 
 for x in eval_file_list:
     assert os.path.exists(x) == True
@@ -45,177 +44,183 @@ for x in eval_file_list:
 num_class = 309
 device = "cuda" if torch.cuda.is_available() else "cpu"
 bert_mdl_size = 'bert-large-uncased'
-bert_tokenizer = AutoTokenizer.from_pretrained(bert_mdl_size, model_max_length=512)
-bert_model = BertModel.from_pretrained(bert_mdl_size).to(device)
+bert_tokenizer = ""
+bert_model = ""
 
 for eval_file in eval_file_list:
-    try:
-        def get_bert_embedding(input_text):
-            input_text = remove_punctuation_and_lowercase(input_text)
-            #print(input_text)
-            inputs = bert_tokenizer(input_text, return_tensors="pt")
-            if inputs['input_ids'].shape[1] > 512:
-                inputs['input_ids'] = inputs['input_ids'][:, :512]
-                inputs['token_type_ids'] = inputs['token_type_ids'][:, :512]
-                inputs['attention_mask'] = inputs['attention_mask'][:, :512]
-            outputs = bert_model(**inputs.to(device))
-            last_hidden_states = torch.mean(outputs.last_hidden_state[0], dim=0).cpu().detach().numpy()
-            return last_hidden_states
 
-        @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(10))
-        def embedding_with_backoff(**kwargs):
-            return openai.Embedding.create(**kwargs)
+    eval_file_folder = os.path.dirname(os.path.abspath(eval_file))
 
-        def get_gpt_embedding(input_text, mdl_size='text-embedding-ada-002'):
-            openai.api_key = 'your_open_ai_key'
-            response = embedding_with_backoff(
-                input=input_text,
-                model=mdl_size
-            )
-            embeddings = response['data'][0]['embedding']
-            return embeddings
+    def get_bert_embedding(input_text):
+        input_text = remove_punctuation_and_lowercase(input_text)
+        #print(input_text)
+        inputs = bert_tokenizer(input_text, return_tensors="pt")
+        if inputs['input_ids'].shape[1] > 512:
+            inputs['input_ids'] = inputs['input_ids'][:, :512]
+            inputs['token_type_ids'] = inputs['token_type_ids'][:, :512]
+            inputs['attention_mask'] = inputs['attention_mask'][:, :512]
+        outputs = bert_model(**inputs.to(device))
+        last_hidden_states = torch.mean(outputs.last_hidden_state[0], dim=0).cpu().detach().numpy()
+        return last_hidden_states
 
-        def cosine_similarity(vector1, vector2):
-            dot_product = sum(v1 * v2 for v1, v2 in zip(vector1, vector2))
-            magnitude1 = math.sqrt(sum(v1 ** 2 for v1 in vector1))
-            magnitude2 = math.sqrt(sum(v2 ** 2 for v2 in vector2))
-            return dot_product / (magnitude1 * magnitude2)
+    def get_gpt_embedding(input_text_list, openai_model='text-embedding-ada-002'):
+        # TODO: change to your openai key
+        client = openai.OpenAI()
+        response = client.embeddings.create(
+            input=input_text_list,
+            model=openai_model,
+            encoding_format='float'
+        )
+        # embeddings = response['data'][0]['embedding']
+        embeddings = [response.data[i].embedding for i in range(len(response.data))]
+        return embeddings
 
-        def remove_punctuation_and_lowercase(text):
-            text = text.translate(str.maketrans('', '', string.punctuation))
-            text = text.lower()
-            return text
+    def cosine_similarity(vector1, vector2):
+        # dot_product = sum(v1 * v2 for v1, v2 in zip(vector1, vector2))
+        # magnitude1 = math.sqrt(sum(v1 ** 2 for v1 in vector1))
+        # magnitude2 = math.sqrt(sum(v2 ** 2 for v2 in vector2))
+        # return dot_product / (magnitude1 * magnitude2)
+        return np.dot(vector1, vector2) / (np.linalg.norm(vector1) * np.linalg.norm(vector2))
 
-        def gen_cm(all_truth, all_pred, save_name):
-            from sklearn.metrics import confusion_matrix
-            import matplotlib.pyplot as plt
-            import numpy as np
+    def remove_punctuation_and_lowercase(text):
+        text = text.translate(str.maketrans('', '', string.punctuation))
+        text = text.lower()
+        return text
 
-            # list of label names
-            label_names = list(label_dict.keys())
+    label_list = np.loadtxt(args.vgg_class_labels, delimiter=',', dtype=str, skiprows=1)
 
-            # generate confusion matrix
-            cm = confusion_matrix(all_truth, all_pred)
+    label_embed_cache_file = '{:s}/label_embed_dict/{:s}_{:s}.json'.format(eval_file_folder, dataset, text_embed_setting)
+    if os.path.exists(label_embed_cache_file):
+        with open(label_embed_cache_file, 'r') as f:
+            json_str = f.read()
+        label_dict = json.loads(json_str, object_pairs_hook=OrderedDict)
+    else:
+        label_dict = OrderedDict()
+        if text_embed_setting == 'gpt':
+            gpt_embeddings_list = get_gpt_embedding(['sound of ' + class_name.replace('_', ' ').lower() for class_name in label_list[:, 2]])
+        for i in range(label_list.shape[0]):
+            class_code = label_list[i, 1]
+            class_name = label_list[i, 2].replace('_', ' ')
+            if text_embed_setting == 'gpt':
+                label_dict[class_name] = gpt_embeddings_list[i]
+            elif text_embed_setting == 'bert':
+                label_dict[class_name] = get_bert_embedding('sound of ' + class_name.lower())
 
-            # plot confusion matrix as a figure
-            plt.imshow(cm, cmap=plt.cm.Blues)
-            plt.title("Confusion Matrix")
-            plt.colorbar()
-            tick_marks = np.arange(len(label_names))
-            plt.xticks(tick_marks, label_names, rotation=90, fontsize=6)
-            plt.yticks(tick_marks, label_names, fontsize=6)
-            plt.xlabel("Predicted Label")
-            plt.ylabel("True Label")
+        os.makedirs(os.path.dirname(label_embed_cache_file), exist_ok=True)
+        with open(label_embed_cache_file, 'w') as f:
+            json_str = json.dumps(label_dict)
+            f.write(json_str)
 
-            # add label values to the confusion matrix cells
-            for i in range(len(label_names)):
-                for j in range(len(label_names)):
-                    plt.text(j, i, cm[i, j], ha="center", va="center", color="white")
+    with open(eval_file, 'r') as fp:
+        eval_data = json.load(fp)
 
-            plt.savefig(save_name, dpi=300)
-
-        label_list = np.loadtxt('/data/sls/scratch/yuangong/cav-mae/pretrained_model/datafiles/vggsound/class_labels_indices_vgg.csv', delimiter=',', dtype=str, skiprows=1)
-        print(label_list)
-
-        if os.path.exists('/data/sls/scratch/yuangong/audiollm/src/llm/alpaca-lora-main/eval_res/label_embed_dict/{:s}_{:s}.json'.format(dataset, text_embed_setting)):
-            with open('/data/sls/scratch/yuangong/audiollm/src/llm/alpaca-lora-main/eval_res/label_embed_dict/{:s}_{:s}.json'.format(dataset, text_embed_setting), 'r') as f:
-                json_str = f.read()
-            label_dict = json.loads(json_str, object_pairs_hook=OrderedDict)
-        else:
-            label_dict = OrderedDict()
-            for i in range(label_list.shape[0]):
-                class_code = label_list[i, 1]
-                class_name = label_list[i, 2].replace('_', ', ')
-                if text_embed_setting == 'gpt':
-                    label_dict[class_name] = get_gpt_embedding('sound of ' + class_name.replace('_', ', ').lower())
-                elif text_embed_setting == 'bert':
-                    label_dict[class_name] = get_bert_embedding('sound of ' + class_name.replace('_', ', ').lower())
-
-            with open('/data/sls/scratch/yuangong/audiollm/src/llm/alpaca-lora-main/eval_res/label_embed_dict/{:s}_{:s}.json'.format(dataset, text_embed_setting), 'w') as f:
-                json_str = json.dumps(label_dict)
-                f.write(json_str)
-
-        print(label_dict.keys())
-
-        with open(eval_file, 'r') as fp:
-            eval_data = json.load(fp)
-
-        print(eval_data[0])
-        print(eval_data[0]['audio_id'])
-        print(eval_data[0]['pred'].replace('"', '').split('Audio caption')[-1][2:])
-        print(eval_data[0]['ref'].split(': ')[-1])
-
-        if os.path.exists('/data/sls/scratch/yuangong/audiollm/src/llm/alpaca-lora-main/eval_res/embedding_cache/{:s}_{:s}_{:s}.json'.format( dataset, llm_task, text_embed_setting)) == True:
-            with open('/data/sls/scratch/yuangong/audiollm/src/llm/alpaca-lora-main/eval_res/embedding_cache/{:s}_{:s}_{:s}.json'.format( dataset, llm_task, text_embed_setting), 'r') as f:
-                embed_cache = f.read()
-            embed_cache = json.loads(embed_cache)
-        else:
-            embed_cache = {}
-
-        def get_pred(cur_pred_list, label_dict, mode='max'):
-            # at beginning, all zero scores
-            score = np.zeros(num_class)
-            label_embed_list = list(label_dict.values())
-            # pred might not be a single text
-            for cur_pred in cur_pred_list:
-                if cur_pred in embed_cache:
-                    cur_pred_embed = embed_cache[cur_pred]
-                else:
-                    if text_embed_setting == 'gpt':
-                        cur_pred_embed = get_gpt_embedding(cur_pred)
-                    else:
-                        cur_pred_embed = get_bert_embedding(cur_pred)
-                    embed_cache[cur_pred] = cur_pred_embed
-                for i in range(num_class):
-                    if mode == 'accu':
-                        score[i] = score[i] + cosine_similarity(cur_pred_embed, label_embed_list[i])
-                    elif mode == 'max':
-                        score[i] = max(score[i], cosine_similarity(cur_pred_embed, label_embed_list[i]))
-            return score
-
-        num_sample = len(eval_data)
-        print('number of samples {:d}'.format(num_sample))
-        all_pred = np.zeros([num_sample, num_class])
-        all_truth = np.zeros([num_sample, num_class])
-        for i in range(num_sample):
-            cur_audio_id = eval_data[i]['audio_id']
+    save_cache_path = '{:s}/embedding_cache/{:s}_{:s}_{:s}.json'.format(eval_file_folder, dataset, llm_task, text_embed_setting)
+    if os.path.exists(save_cache_path) == True:
+        with open(save_cache_path, 'r') as f:
+            embed_cache = f.read()
+        embed_cache = json.loads(embed_cache)
+    else:
+        embed_cache = {}
+        if text_embed_setting == 'gpt':
+            print('Embedding cache not found, creating new cache')
             if llm_task == 'cla':
-                cur_pred_list = eval_data[i]['pred'].split(':')[-1].split('.')[0][1:].split(';')
-                cur_pred_list = ['sound of ' + x.lower().lstrip() for x in cur_pred_list]
+                list_of_preds_for_cache = [x['pred'].split(':')[-1].split('.')[0][1:].split(';') for x in eval_data]
+                list_of_preds_for_cache = ['sound of ' + x.lower().lstrip() for x in list_of_preds_for_cache]
             elif llm_task == 'caption':
-                cur_pred_list = eval_data[i]['pred'].replace('"', '').split('Audio caption')[-1][2:]
-                cur_pred_list = ['sound of ' + cur_pred_list.lower()]
+                list_of_preds_for_cache = [x['pred'].replace('"', '').split('Audio caption')[-1][2:] for x in eval_data]
+                list_of_preds_for_cache = ['sound of ' + x.lower() for x in list_of_preds_for_cache]
+            total_num_preds = len(list_of_preds_for_cache)
+            
+            list_of_embeds_for_cache = []
+            samples_done = 0
+            while samples_done < total_num_preds:
+                do_until = min(samples_done + args.max_openai_batch_size, total_num_preds)
+                list_of_embeds_for_cache += get_gpt_embedding(list_of_preds_for_cache[samples_done:do_until])
+                samples_done = do_until
+                print(f'\rDone getting {samples_done}/{total_num_preds} embeddings..', end='')
+            print()
+            for i in range(len(list_of_preds_for_cache)):
+                embed_cache[list_of_preds_for_cache[i]] = list_of_embeds_for_cache[i]
+            embed_cache_json = json.dumps(embed_cache)
 
-            cur_truth = eval_data[i]['ref'].split(': ')[-1].lower()
+            os.makedirs(os.path.dirname(save_cache_path), exist_ok=True)
+            with open(save_cache_path, 'w') as f:
+                f.write(embed_cache_json)
+            print('Embedding cache created')
 
-            cur_truth_idx = list(label_dict.keys()).index(cur_truth)
-            cur_pred_score = get_pred(cur_pred_list, label_dict)
-            all_pred[i] = cur_pred_score
-            all_truth[i, cur_truth_idx] = 1.0
+    def get_pred(cur_pred_list, label_dict, mode='max'):
+        # at beginning, all zero scores
+        score = np.zeros(num_class)
+        label_embed_list = list(label_dict.values())
+        # pred might not be a single text
+        for cur_pred in cur_pred_list:
+            if cur_pred in embed_cache:
+                cur_pred_embed = embed_cache[cur_pred]
+            else:
+                if text_embed_setting == 'gpt':
+                    # cur_pred_embed = get_gpt_embedding(cur_pred)
+                    raise Exception('Should have cached gpt embedding')
+                else:
+                    cur_pred_embed = get_bert_embedding(cur_pred)
+                embed_cache[cur_pred] = cur_pred_embed
+            for i in range(num_class):
+                if mode == 'accu':
+                    score[i] = score[i] + cosine_similarity(cur_pred_embed, label_embed_list[i])
+                elif mode == 'max':
+                    score[i] = max(score[i], cosine_similarity(cur_pred_embed, label_embed_list[i]))
+        return score
 
-            if i% 100 == 0:
-                print('{:d} / {:d} processed'.format(i, num_sample))
+    num_sample = len(eval_data)
+    print('number of samples {:d}'.format(num_sample))
+    all_pred = np.zeros([num_sample, num_class])
+    all_truth = np.zeros([num_sample, num_class])
+    current_batch_size = 0
+    current_batch_input = []
+    for i in range(num_sample):
+        cur_audio_id = eval_data[i]['audio_id']
+        if llm_task == 'cla':
+            cur_pred_list = eval_data[i]['pred'].split(':')[-1].split('.')[0][1:].split(';')
+            cur_pred_list = ['sound of ' + x.lower().lstrip() for x in cur_pred_list]
+        elif llm_task == 'caption':
+            cur_pred_list = eval_data[i]['pred'].replace('"', '').split('Audio caption')[-1][2:]
+            cur_pred_list = ['sound of ' + cur_pred_list.lower()]
 
-        save_fold = "/data/sls/scratch/yuangong/audiollm/src/llm/alpaca-lora-main/eval_res/{:s}_{:s}_{:s}_report".format('.'.join(eval_file.split('/')[-1].split('.')[:-1]), llm_task, text_embed_setting)
-        if os.path.exists(save_fold) == False:
-            os.makedirs(save_fold)
+        cur_truth = eval_data[i]['ref'].split(': ')[-1].lower().replace(',', '')
 
-        np.save(save_fold + '/all_pred.npy', all_pred)
-        np.save(save_fold + '/all_truth.npy', all_truth)
-        stats = calculate_stats(all_pred, all_truth)
+        cur_truth_idx = list(label_dict.keys()).index(cur_truth)
+        all_truth[i, cur_truth_idx] = 1.0
 
-        mAP = np.mean([stat['AP'] for stat in stats])
-        mAUC = np.mean([stat['auc'] for stat in stats])
-        acc = stats[0]['acc']
+        current_batch_input.append(cur_pred_list)
+        current_batch_size += 1
 
-        np.savetxt(save_fold + '/result_summary.csv', [mAP, mAUC, acc], delimiter=',')
+        if current_batch_size == args.num_os_processes or i == num_sample-1:
+            def get_pred_for_one_sample(x):
+                return get_pred(x, label_dict)
+            pool = mp.Pool(args.num_os_processes)
+            all_pred_batch_output = pool.map(get_pred_for_one_sample, current_batch_input)
+            pool.close()
+            for j in range(len(all_pred_batch_output)):
+                all_pred[i + 1 - current_batch_size + j] = all_pred_batch_output[j]
+            current_batch_input = []
+            current_batch_size = 0
+        # cur_pred_score = get_pred(cur_pred_list, label_dict)
+        # all_pred[i] = cur_pred_score
 
-        embed_cache = json.dumps(embed_cache)
-        save_cache_path = '/data/sls/scratch/yuangong/audiollm/src/llm/alpaca-lora-main/eval_res/embedding_cache/{:s}_{:s}_{:s}.json'.format(dataset, llm_task, text_embed_setting)
-        with open(save_cache_path, 'w') as f:
-            f.write(embed_cache)
+        print(f'\rDone with {i+1}/{num_sample} samples..', end='')
+    print()
 
-        print('vgg accuracy: ', acc)
+    save_fold = "{:s}/{:s}_{:s}_{:s}_cla_report".format(eval_file_folder, '.'.join(eval_file.split('/')[-1].split('.')[:-1]), llm_task, text_embed_setting)
+    if os.path.exists(save_fold) == False:
+        os.makedirs(save_fold)
 
-    except:
-        pass
+    np.save(save_fold + '/all_pred.npy', all_pred)
+    np.save(save_fold + '/all_truth.npy', all_truth)
+    stats = calculate_stats(all_pred, all_truth)
+
+    mAP = np.mean([stat['AP'] for stat in stats])
+    mAUC = np.mean([stat['auc'] for stat in stats])
+    acc = stats[0]['acc']
+
+    np.savetxt(save_fold + '/result_summary.csv', [mAP, mAUC, acc], delimiter=',')
+
+    print('vgg accuracy: ', acc)

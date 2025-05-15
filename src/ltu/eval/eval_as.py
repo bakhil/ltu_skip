@@ -31,7 +31,7 @@ parser.add_argument('--files', nargs='+', required=True,
 parser.add_argument('--as_class_labels', type=str, default='./labels/class_labels_indices_as.csv')
 parser.add_argument('--text_embed_setting', type=str, default='gpt', choices=['gpt', 'bert'])
 parser.add_argument('--max_openai_batch_size', type=int, default=2000)
-parser.add_argument('--num_os_processes', type=int, default=50)
+parser.add_argument('--num_os_processes', type=int, default=40)
 args = parser.parse_args()
 
 eval_file_list = args.files
